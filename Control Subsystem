@@ -1,0 +1,609 @@
+# CONTROL MODULE ALGORITHM
+# 输入：决策模块的驾驶决策
+# 输出：执行器控制命令
+
+class ControlModule:
+    
+    def __init__(self):
+        # 控制器参数
+        self.steering_pid = PIDController(kp=1.5, ki=0.1, kd=0.05)
+        self.throttle_pid = PIDController(kp=0.8, ki=0.05, kd=0.02)
+        self.brake_pid = PIDController(kp=2.0, ki=0.2, kd=0.1)
+        
+        # 车辆参数
+        self.wheelbase = 2.7  # 轴距（米）
+        self.max_steering_angle = 45.0  # 最大转向角（度）
+        self.max_acceleration = 3.0  # 最大加速度（m/s²）
+        self.max_deceleration = 7.0  # 最大减速度（m/s²）
+        
+        # 状态记录
+        self.control_history = []
+        self.current_actuator_state = {
+            'steering_angle': 0.0,
+            'throttle_position': 0.0,
+            'brake_position': 0.0,
+            'gear_position': 'D'
+        }
+    
+    def execute_control_commands(self, decision_data, vehicle_state):
+        """
+        主控制算法：将决策转化为执行器控制命令
+        """
+        print("=== CONTROL MODULE START ===")
+        
+        # 步骤1: 控制模式选择
+        control_mode = self.select_control_mode(decision_data)
+        
+        # 步骤2: 参考轨迹跟踪
+        trajectory_error = self.calculate_trajectory_error(
+            decision_data['trajectory'],
+            vehicle_state
+        )
+        
+        # 步骤3: 横向控制计算
+        steering_control = self.compute_steering_control(
+            trajectory_error,
+            control_mode,
+            vehicle_state
+        )
+        
+        # 步骤4: 纵向控制计算
+        longitudinal_control = self.compute_longitudinal_control(
+            decision_data,
+            trajectory_error,
+            control_mode,
+            vehicle_state
+        )
+        
+        # 步骤5: 横纵向协调
+        coordinated_control = self.coordinate_lateral_longitudinal(
+            steering_control,
+            longitudinal_control,
+            vehicle_state
+        )
+        
+        # 步骤6: 执行器命令生成
+        actuator_commands = self.generate_actuator_commands(
+            coordinated_control,
+            self.current_actuator_state
+        )
+        
+        # 步骤7: 执行器限制处理
+        actuator_commands = self.apply_actuator_limits(actuator_commands)
+        
+        # 步骤8: 控制平滑与滤波
+        smoothed_commands = self.smooth_control_commands(
+            actuator_commands,
+            self.control_history
+        )
+        
+        # 步骤9: 紧急控制覆盖
+        if decision_data.get('emergency_override', False):
+            smoothed_commands = self.apply_emergency_control(
+                decision_data,
+                smoothed_commands,
+                vehicle_state
+            )
+        
+        # 步骤10: 控制验证与安全监控
+        final_commands = self.validate_and_monitor_control(
+            smoothed_commands,
+            vehicle_state
+        )
+        
+        # 更新当前状态
+        self.update_actuator_state(final_commands)
+        
+        # 记录控制历史
+        self.record_control_history(final_commands, vehicle_state)
+        
+        print("=== CONTROL MODULE END ===")
+        
+        return final_commands
+    
+    def select_control_mode(self, decision_data):
+        """步骤1: 控制模式选择算法"""
+        print("1. Selecting control mode...")
+        
+        driving_state = decision_data.get('driving_state', 'NORMAL_DRIVING')
+        
+        # 算法1.1: 基于驾驶状态的模式选择
+        if driving_state == "EMERGENCY_STOP":
+            control_mode = "EMERGENCY_BRAKING"
+        elif driving_state == "LANE_CHANGE":
+            control_mode = "LANE_CHANGE_CONTROL"
+        elif driving_state == "FOLLOWING":
+            control_mode = "ADAPTIVE_CRUISE_CONTROL"
+        elif driving_state == "TURNING":
+            control_mode = "CURVE_CONTROL"
+        elif driving_state == "STOPPING":
+            control_mode = "PRECISION_STOP"
+        else:
+            control_mode = "NORMAL_CONTROL"
+        
+        # 算法1.2: 考虑车辆状态
+        if self.check_vehicle_limitations():
+            control_mode = "LIMITED_CONTROL"
+        
+        # 算法1.3: 考虑环境条件
+        environment_factor = self.assess_environment_factor()
+        if environment_factor < 0.5:
+            control_mode = "CONSERVATIVE_CONTROL"
+        
+        print(f"Selected control mode: {control_mode}")
+        return control_mode
+    
+    def calculate_trajectory_error(self, trajectory, vehicle_state):
+        """步骤2: 参考轨迹跟踪误差计算算法"""
+        print("2. Calculating trajectory tracking error...")
+        
+        # 算法2.1: 寻找最近轨迹点
+        closest_point, closest_index = self.find_closest_trajectory_point(
+            trajectory,
+            vehicle_state['position']
+        )
+        
+        # 算法2.2: 计算横向误差
+        lateral_error = self.calculate_lateral_error(
+            closest_point,
+            vehicle_state['position'],
+            vehicle_state['heading']
+        )
+        
+        # 算法2.3: 计算纵向误差
+        longitudinal_error = self.calculate_longitudinal_error(
+            closest_point,
+            vehicle_state['position']
+        )
+        
+        # 算法2.4: 计算航向误差
+        heading_error = self.calculate_heading_error(
+            closest_point['heading'],
+            vehicle_state['heading']
+        )
+        
+        # 算法2.5: 计算速度误差
+        velocity_error = self.calculate_velocity_error(
+            closest_point['velocity'],
+            vehicle_state['velocity']
+        )
+        
+        trajectory_error = {
+            'lateral_error': lateral_error,
+            'longitudinal_error': longitudinal_error,
+            'heading_error': heading_error,
+            'velocity_error': velocity_error,
+            'closest_point_index': closest_index,
+            'closest_point': closest_point
+        }
+        
+        return trajectory_error
+    
+    def compute_steering_control(self, trajectory_error, control_mode, vehicle_state):
+        """步骤3: 横向控制计算算法"""
+        print("3. Computing steering control...")
+        
+        # 算法3.1: 纯追踪控制器（Pure Pursuit）
+        lookahead_distance = self.calculate_lookahead_distance(vehicle_state['velocity'])
+        lookahead_point = self.find_lookahead_point(trajectory_error['closest_point_index'], lookahead_distance)
+        
+        # 算法3.2: 计算曲率
+        curvature = self.calculate_curvature(lookahead_point, vehicle_state)
+        
+        # 算法3.3: 阿克曼转向计算
+        steering_angle = self.calculate_ackermann_steering(curvature)
+        
+        # 算法3.4: PID误差修正
+        steering_correction = self.steering_pid.update(
+            trajectory_error['lateral_error'],
+            trajectory_error['heading_error']
+        )
+        
+        # 算法3.5: 根据控制模式调整
+        if control_mode == "LANE_CHANGE_CONTROL":
+            steering_angle = self.adjust_for_lane_change(steering_angle, vehicle_state)
+        elif control_mode == "CURVE_CONTROL":
+            steering_angle = self.adjust_for_curve(steering_angle, vehicle_state['velocity'])
+        
+        # 算法3.6: 前馈控制添加
+        feedforward_steering = self.calculate_feedforward_steering(curvature)
+        
+        final_steering = steering_angle + steering_correction + feedforward_steering
+        
+        steering_control = {
+            'steering_angle': final_steering,
+            'steering_rate': self.calculate_steering_rate(final_steering),
+            'curvature': curvature,
+            'control_mode': control_mode
+        }
+        
+        return steering_control
+    
+    def compute_longitudinal_control(self, decision_data, trajectory_error, control_mode, vehicle_state):
+        """步骤4: 纵向控制计算算法"""
+        print("4. Computing longitudinal control...")
+        
+        # 算法4.1: 速度跟踪控制
+        target_velocity = decision_data.get('target_velocity', vehicle_state['velocity'])
+        
+        # 算法4.2: 根据控制模式选择控制策略
+        if control_mode == "ADAPTIVE_CRUISE_CONTROL":
+            throttle, brake = self.acc_control(
+                target_velocity,
+                vehicle_state,
+                decision_data.get('obstacle_info', {})
+            )
+        elif control_mode == "EMERGENCY_BRAKING":
+            throttle, brake = self.emergency_brake_control(vehicle_state)
+        elif control_mode == "PRECISION_STOP":
+            throttle, brake = self.precision_stop_control(
+                decision_data.get('target_position'),
+                vehicle_state
+            )
+        else:
+            # 算法4.3: PID速度控制
+            velocity_error = target_velocity - vehicle_state['velocity']
+            
+            # 加速情况
+            if velocity_error > 0:
+                throttle_output = self.throttle_pid.update(velocity_error)
+                brake_output = 0.0
+            # 减速情况
+            else:
+                throttle_output = 0.0
+                brake_output = self.brake_pid.update(abs(velocity_error))
+            
+            throttle = throttle_output
+            brake = brake_output
+        
+        # 算法4.4: 考虑坡度补偿
+        road_slope = self.estimate_road_slope(vehicle_state)
+        if road_slope > 0:  # 上坡
+            throttle = self.compensate_for_uphill(throttle, road_slope)
+        elif road_slope < 0:  # 下坡
+            brake = self.compensate_for_downhill(brake, road_slope, vehicle_state['velocity'])
+        
+        longitudinal_control = {
+            'throttle_command': throttle,
+            'brake_command': brake,
+            'target_velocity': target_velocity,
+            'control_mode': control_mode
+        }
+        
+        return longitudinal_control
+    
+    def coordinate_lateral_longitudinal(self, steering_control, longitudinal_control, vehicle_state):
+        """步骤5: 横纵向协调控制算法"""
+        print("5. Coordinating lateral and longitudinal control...")
+        
+        # 算法5.1: 速度相关的转向灵敏度调整
+        steering_gain = self.adjust_steering_gain_by_speed(vehicle_state['velocity'])
+        adjusted_steering = steering_control['steering_angle'] * steering_gain
+        
+        # 算法5.2: 弯道速度控制
+        if abs(steering_control['curvature']) > 0.01:  # 有显著曲率
+            max_safe_speed = self.calculate_max_safe_speed(steering_control['curvature'])
+            
+            if vehicle_state['velocity'] > max_safe_speed:
+                # 算法5.3: 弯道减速
+                speed_reduction = vehicle_state['velocity'] - max_safe_speed
+                additional_brake = self.calculate_additional_brake_for_curve(speed_reduction)
+                longitudinal_control['brake_command'] += additional_brake
+                longitudinal_control['throttle_command'] = 0.0
+        
+        # 算法5.4: 紧急转向时的制动协调
+        if abs(adjusted_steering) > 30.0:  # 大角度转向
+            # 轻微制动以增加前轮抓地力
+            longitudinal_control['brake_command'] = max(
+                longitudinal_control['brake_command'],
+                10.0
+            )
+        
+        # 算法5.5: 牵引力控制集成
+        if self.detect_wheel_slip(vehicle_state):
+            coordinated_control = self.apply_traction_control(
+                adjusted_steering,
+                longitudinal_control,
+                vehicle_state
+            )
+        else:
+            coordinated_control = {
+                'steering_angle': adjusted_steering,
+                'throttle': longitudinal_control['throttle_command'],
+                'brake': longitudinal_control['brake_command'],
+                'coordination_active': True
+            }
+        
+        return coordinated_control
+    
+    def generate_actuator_commands(self, coordinated_control, current_actuator_state):
+        """步骤6: 执行器命令生成算法"""
+        print("6. Generating actuator commands...")
+        
+        # 算法6.1: 转向执行器命令
+        steering_angle = coordinated_control['steering_angle']
+        
+        # 转换为执行器单位（例如PWM值或CAN信号）
+        steering_command = self.convert_steering_to_actuator_value(steering_angle)
+        
+        # 算法6.2: 油门执行器命令
+        throttle_command = coordinated_control['throttle']
+        throttle_actuator_value = self.convert_throttle_to_actuator_value(throttle_command)
+        
+        # 算法6.3: 制动执行器命令
+        brake_command = coordinated_control['brake']
+        brake_actuator_value = self.convert_brake_to_actuator_value(brake_command)
+        
+        # 算法6.4: 档位选择（简化）
+        if brake_command > 50 and vehicle_state['velocity'] < 1.0:
+            gear_command = 'P'  # 停车
+        elif brake_command > 30:
+            gear_command = 'N'  # 空档
+        else:
+            gear_command = 'D'  # 前进档
+        
+        actuator_commands = {
+            'steering': {
+                'value': steering_command,
+                'angle': steering_angle,
+                'unit': 'degrees'
+            },
+            'throttle': {
+                'value': throttle_actuator_value,
+                'position': throttle_command,
+                'unit': 'percentage'
+            },
+            'brake': {
+                'value': brake_actuator_value,
+                'position': brake_command,
+                'unit': 'percentage'
+            },
+            'gear': gear_command,
+            'timestamp': get_current_time()
+        }
+        
+        return actuator_commands
+    
+    def apply_actuator_limits(self, actuator_commands):
+        """步骤7: 执行器限制处理算法"""
+        print("7. Applying actuator limits...")
+        
+        # 算法7.1: 转向限制
+        max_steering = self.max_steering_angle
+        if actuator_commands['steering']['angle'] > max_steering:
+            actuator_commands['steering']['angle'] = max_steering
+            actuator_commands['steering']['value'] = self.convert_steering_to_actuator_value(max_steering)
+        elif actuator_commands['steering']['angle'] < -max_steering:
+            actuator_commands['steering']['angle'] = -max_steering
+            actuator_commands['steering']['value'] = self.convert_steering_to_actuator_value(-max_steering)
+        
+        # 算法7.2: 油门限制
+        actuator_commands['throttle']['position'] = min(
+            max(actuator_commands['throttle']['position'], 0.0),
+            100.0
+        )
+        
+        # 算法7.3: 制动限制
+        actuator_commands['brake']['position'] = min(
+            max(actuator_commands['brake']['position'], 0.0),
+            100.0
+        )
+        
+        # 算法7.4: 执行器速率限制
+        actuator_commands = self.apply_rate_limits(actuator_commands)
+        
+        # 算法7.5: 互斥逻辑（油门和制动不同时作用）
+        if actuator_commands['throttle']['position'] > 10 and actuator_commands['brake']['position'] > 10:
+            # 优先制动
+            actuator_commands['throttle']['position'] = 0.0
+        
+        return actuator_commands
+    
+    def smooth_control_commands(self, actuator_commands, control_history):
+        """步骤8: 控制平滑与滤波算法"""
+        print("8. Smoothing control commands...")
+        
+        # 算法8.1: 低通滤波
+        if control_history:
+            # 转向平滑
+            previous_steering = control_history[-1]['steering']['angle']
+            smoothed_steering = self.low_pass_filter(
+                actuator_commands['steering']['angle'],
+                previous_steering,
+                alpha=0.3
+            )
+            actuator_commands['steering']['angle'] = smoothed_steering
+            
+            # 油门平滑
+            previous_throttle = control_history[-1]['throttle']['position']
+            smoothed_throttle = self.low_pass_filter(
+                actuator_commands['throttle']['position'],
+                previous_throttle,
+                alpha=0.5
+            )
+            actuator_commands['throttle']['position'] = smoothed_throttle
+            
+            # 制动平滑
+            previous_brake = control_history[-1]['brake']['position']
+            smoothed_brake = self.low_pass_filter(
+                actuator_commands['brake']['position'],
+                previous_brake,
+                alpha=0.5
+            )
+            actuator_commands['brake']['position'] = smoothed_brake
+        
+        # 算法8.2: 防抖处理
+        actuator_commands = self.apply_deadband(actuator_commands)
+        
+        # 算法8.3: 预测性平滑
+        if len(control_history) >= 3:
+            actuator_commands = self.predictive_smoothing(actuator_commands, control_history)
+        
+        return actuator_commands
+    
+    def apply_emergency_control(self, decision_data, current_commands, vehicle_state):
+        """步骤9: 紧急控制覆盖算法"""
+        print("9. Applying emergency control override...")
+        
+        emergency_type = decision_data.get('emergency_type', 'UNKNOWN')
+        
+        if emergency_type == "COLLISION_IMMINENT":
+            # 算法9.1: 紧急全力制动
+            current_commands['brake']['position'] = 100.0
+            current_commands['throttle']['position'] = 0.0
+            
+            # 算法9.2: 紧急转向避让
+            avoidance_direction = self.determine_avoidance_direction(decision_data)
+            current_commands['steering']['angle'] = avoidance_direction * 45.0  # 45度紧急转向
+        
+        elif emergency_type == "SYSTEM_FAILURE":
+            # 算法9.3: 故障安全控制
+            current_commands = self.fail_safe_control(current_commands, vehicle_state)
+        
+        elif emergency_type == "OBSTACLE_SUDDEN":
+            # 算法9.4: 突发障碍物应对
+            current_commands = self.sudden_obstacle_response(
+                current_commands,
+                decision_data,
+                vehicle_state
+            )
+        
+        # 算法9.5: 紧急状态标志
+        current_commands['emergency_override'] = True
+        current_commands['emergency_type'] = emergency_type
+        
+        return current_commands
+    
+    def validate_and_monitor_control(self, control_commands, vehicle_state):
+        """步骤10: 控制验证与安全监控算法"""
+        print("10. Validating and monitoring control...")
+        
+        # 算法10.1: 执行器响应验证
+        actuator_response = self.monitor_actuator_response(control_commands)
+        
+        # 算法10.2: 车辆动态稳定性检查
+        stability_check = self.check_vehicle_stability(
+            control_commands,
+            vehicle_state
+        )
+        
+        # 算法10.3: 控制效果评估
+        control_effectiveness = self.evaluate_control_effectiveness(
+            control_commands,
+            vehicle_state
+        )
+        
+        # 算法10.4: 安全边界检查
+        safety_margin = self.check_safety_margin(vehicle_state)
+        
+        # 算法10.5: 故障检测
+        faults_detected = self.detect_control_faults(control_commands, vehicle_state)
+        
+        # 算法10.6: 最终命令调整
+        if not stability_check or safety_margin < 0.1 or len(faults_detected) > 0:
+            # 进入安全控制模式
+            final_commands = self.safety_control_adjustment(
+                control_commands,
+                vehicle_state
+            )
+            final_commands['safety_limited'] = True
+        else:
+            final_commands = control_commands
+            final_commands['safety_limited'] = False
+        
+        # 算法10.7: 添加监控信息
+        final_commands['monitoring_info'] = {
+            'actuator_response': actuator_response,
+            'stability_check': stability_check,
+            'control_effectiveness': control_effectiveness,
+            'safety_margin': safety_margin,
+            'faults_detected': faults_detected,
+            'validation_timestamp': get_current_time()
+        }
+        
+        return final_commands
+    
+    # 辅助方法
+    def low_pass_filter(self, current_value, previous_value, alpha):
+        """低通滤波"""
+        return alpha * current_value + (1 - alpha) * previous_value
+    
+    def apply_deadband(self, commands):
+        """防抖处理"""
+        # 小信号死区
+        if abs(commands['steering']['angle']) < 0.5:
+            commands['steering']['angle'] = 0.0
+        
+        if commands['throttle']['position'] < 2.0:
+            commands['throttle']['position'] = 0.0
+        
+        if commands['brake']['position'] < 2.0:
+            commands['brake']['position'] = 0.0
+        
+        return commands
+    
+    def update_actuator_state(self, commands):
+        """更新执行器状态"""
+        self.current_actuator_state = {
+            'steering_angle': commands['steering']['angle'],
+            'throttle_position': commands['throttle']['position'],
+            'brake_position': commands['brake']['position'],
+            'gear_position': commands['gear']
+        }
+    
+    def record_control_history(self, commands, vehicle_state):
+        """记录控制历史"""
+        record = {
+            'commands': commands,
+            'vehicle_state': vehicle_state,
+            'timestamp': get_current_time()
+        }
+        self.control_history.append(record)
+        
+        # 保持历史记录大小
+        if len(self.control_history) > 100:
+            self.control_history.pop(0)
+
+
+# PID控制器类
+class PIDController:
+    def __init__(self, kp, ki, kd):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.integral = 0.0
+        self.previous_error = 0.0
+        self.integral_limit = 10.0
+    
+    def update(self, error, dt=0.1):
+        self.integral += error * dt
+        self.integral = max(min(self.integral, self.integral_limit), -self.integral_limit)
+        
+        derivative = (error - self.previous_error) / dt if dt > 0 else 0.0
+        
+        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+        
+        self.previous_error = error
+        
+        return output
+
+
+# 主控制循环
+def control_main_loop():
+    control_module = ControlModule()
+    
+    while vehicle_is_running:
+        # 接收决策数据
+        decision_data = receive_from_decision_module()
+        
+        # 获取当前车辆状态
+        vehicle_state = get_vehicle_state()
+        
+        # 执行控制算法
+        control_commands = control_module.execute_control_commands(decision_data, vehicle_state)
+        
+        # 发送到执行器
+        send_to_actuators(control_commands)
+        
+        # 控制循环频率（例如50Hz）
+        sleep(0.02)
