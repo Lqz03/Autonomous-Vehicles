@@ -1,0 +1,500 @@
+# DECISION MODULE ALGORITHM
+# 输入：感知模块的结构化环境信息
+# 输出：驾驶决策指令
+
+class DecisionModule:
+    
+    def __init__(self):
+        # 决策参数
+        self.safety_distance = 50.0  # 安全跟车距离（米）
+        self.min_safety_distance = 10.0  # 最小安全距离
+        self.reaction_time = 1.5  # 反应时间（秒）
+        self.max_deceleration = 7.0  # 最大减速度（m/s²）
+        
+        # 状态机
+        self.current_driving_state = "NORMAL_DRIVING"
+        self.previous_decisions = []
+        
+        # 路径规划器
+        self.route_planner = RoutePlanner()
+        self.local_planner = LocalPlanner()
+        
+        # 行为预测器
+        self.behavior_predictor = BehaviorPredictor()
+    
+    def make_driving_decisions(self, perception_data):
+        """
+        主决策算法：基于感知数据做出驾驶决策
+        """
+        print("=== DECISION MODULE START ===")
+        
+        # 步骤1: 环境评估与风险评估
+        risk_assessment = self.assess_environmental_risk(perception_data)
+        
+        # 步骤2: 行为预测
+        behavior_predictions = self.predict_other_agents_behavior(perception_data)
+        
+        # 步骤3: 状态机更新
+        self.update_driving_state(perception_data, risk_assessment)
+        
+        # 步骤4: 高层次路径规划
+        global_path = self.plan_global_route(perception_data.ego_state)
+        
+        # 步骤5: 局部轨迹生成
+        candidate_trajectories = self.generate_candidate_trajectories(
+            perception_data, 
+            global_path
+        )
+        
+        # 步骤6: 轨迹评估与选择
+        selected_trajectory = self.evaluate_and_select_trajectory(
+            candidate_trajectories,
+            risk_assessment,
+            behavior_predictions
+        )
+        
+        # 步骤7: 决策生成
+        driving_decisions = self.generate_driving_decisions(
+            selected_trajectory,
+            self.current_driving_state
+        )
+        
+        # 步骤8: 决策优化与平滑
+        optimized_decisions = self.optimize_decisions(driving_decisions)
+        
+        # 步骤9: 紧急情况检查
+        if risk_assessment['emergency_level'] > 0.8:
+            optimized_decisions = self.handle_emergency_situation(
+                perception_data,
+                optimized_decisions
+            )
+        
+        # 步骤10: 决策验证与安全检查
+        final_decisions = self.validate_decisions(
+            optimized_decisions,
+            perception_data
+        )
+        
+        print("=== DECISION MODULE END ===")
+        
+        return final_decisions
+    
+    def assess_environmental_risk(self, perception_data):
+        """步骤1: 环境风险评估算法"""
+        print("1. Assessing environmental risk...")
+        
+        risk_factors = {
+            'static_risk': 0.0,
+            'dynamic_risk': 0.0,
+            'weather_risk': 0.0,
+            'road_condition_risk': 0.0,
+            'total_risk': 0.0,
+            'emergency_level': 0.0
+        }
+        
+        # 算法1.1: 静态风险评估
+        risk_factors['static_risk'] = self.assess_static_risk(
+            perception_data.lane_info,
+            perception_data.traffic_signals
+        )
+        
+        # 算法1.2: 动态风险评估
+        risk_factors['dynamic_risk'] = self.assess_dynamic_risk(
+            perception_data.obstacles,
+            perception_data.ego_state
+        )
+        
+        # 算法1.3: 天气风险评估
+        weather_condition = perception_data.environment_map.get('weather', 'clear')
+        risk_factors['weather_risk'] = self.assess_weather_risk(weather_condition)
+        
+        # 算法1.4: 道路状况评估
+        road_condition = perception_data.environment_map.get('road_condition', 'dry')
+        risk_factors['road_condition_risk'] = self.assess_road_condition_risk(road_condition)
+        
+        # 算法1.5: 综合风险评估
+        risk_factors['total_risk'] = self.compute_total_risk(risk_factors)
+        
+        # 算法1.6: 紧急等级判断
+        risk_factors['emergency_level'] = self.determine_emergency_level(
+            risk_factors['total_risk'],
+            perception_data
+        )
+        
+        return risk_factors
+    
+    def predict_other_agents_behavior(self, perception_data):
+        """步骤2: 其他交通参与者行为预测算法"""
+        print("2. Predicting other agents' behavior...")
+        
+        predictions = {}
+        
+        # 算法2.1: 车辆行为预测
+        for obstacle in perception_data.obstacles:
+            if obstacle['type'] == 'vehicle':
+                # 使用运动模型预测
+                predicted_trajectory = self.predict_vehicle_trajectory(obstacle)
+                
+                # 意图识别
+                intention = self.recognize_vehicle_intention(obstacle, perception_data)
+                
+                predictions[obstacle['id']] = {
+                    'type': 'vehicle',
+                    'predicted_trajectory': predicted_trajectory,
+                    'intention': intention,
+                    'confidence': self.calculate_prediction_confidence(obstacle)
+                }
+        
+        # 算法2.2: 行人行为预测
+        pedestrians = [o for o in perception_data.obstacles if o['type'] == 'pedestrian']
+        for pedestrian in pedestrians:
+            predicted_path = self.predict_pedestrian_path(pedestrian)
+            
+            predictions[pedestrian['id']] = {
+                'type': 'pedestrian',
+                'predicted_path': predicted_path,
+                'crossing_intention': self.predict_crossing_intention(pedestrian),
+                'confidence': 0.7  # 行人预测置信度通常较低
+            }
+        
+        # 算法2.3: 交通信号变化预测
+        for signal in perception_data.traffic_signals:
+            if signal['type'] == 'traffic_light':
+                signal_change_prediction = self.predict_signal_change(signal)
+                predictions[f"signal_{signal['position']}"] = {
+                    'type': 'traffic_signal',
+                    'predicted_change': signal_change_prediction,
+                    'time_to_change': signal.get('countdown', None)
+                }
+        
+        return predictions
+    
+    def update_driving_state(self, perception_data, risk_assessment):
+        """步骤3: 驾驶状态机更新算法"""
+        print("3. Updating driving state machine...")
+        
+        previous_state = self.current_driving_state
+        
+        # 算法3.1: 状态转换条件检查
+        state_transition_conditions = self.check_state_transition_conditions(
+            perception_data,
+            risk_assessment
+        )
+        
+        # 算法3.2: 状态转换逻辑
+        if risk_assessment['emergency_level'] > 0.9:
+            new_state = "EMERGENCY_STOP"
+        elif risk_assessment['emergency_level'] > 0.7:
+            new_state = "EMERGENCY_MANEUVER"
+        elif self.should_lane_change(perception_data):
+            new_state = "LANE_CHANGE"
+        elif self.should_follow_vehicle(perception_data):
+            new_state = "FOLLOWING"
+        elif self.should_stop_for_signal(perception_data):
+            new_state = "STOPPING"
+        elif self.should_turn(perception_data):
+            new_state = "TURNING"
+        else:
+            new_state = "NORMAL_DRIVING"
+        
+        # 算法3.3: 状态转换有效性验证
+        if self.validate_state_transition(previous_state, new_state):
+            self.current_driving_state = new_state
+            print(f"State changed: {previous_state} -> {new_state}")
+        else:
+            print(f"State transition invalid: {previous_state} -> {new_state}")
+    
+    def plan_global_route(self, ego_state):
+        """步骤4: 全局路径规划算法"""
+        print("4. Planning global route...")
+        
+        # 算法4.1: 目的地确认
+        destination = self.get_destination()
+        
+        # 算法4.2: 道路网络加载
+        road_network = self.load_road_network(ego_state['position'])
+        
+        # 算法4.3: 路径搜索（A* 或 Dijkstra）
+        route = self.search_optimal_route(
+            ego_state['position'],
+            destination,
+            road_network
+        )
+        
+        # 算法4.4: 路径优化
+        optimized_route = self.optimize_route(route)
+        
+        # 算法4.5: 路径分段
+        route_segments = self.segment_route(optimized_route)
+        
+        return {
+            'destination': destination,
+            'full_route': optimized_route,
+            'current_segment': route_segments[0],
+            'remaining_segments': route_segments[1:],
+            'total_distance': self.calculate_route_distance(optimized_route)
+        }
+    
+    def generate_candidate_trajectories(self, perception_data, global_path):
+        """步骤5: 局部轨迹生成算法"""
+        print("5. Generating candidate trajectories...")
+        
+        candidate_trajectories = []
+        
+        # 算法5.1: 确定规划范围
+        planning_horizon = self.determine_planning_horizon(
+            perception_data.ego_state['velocity']
+        )
+        
+        # 算法5.2: 采样轨迹起点
+        start_state = self.create_start_state(perception_data.ego_state)
+        
+        # 算法5.3: 横向轨迹采样
+        lateral_trajectories = self.sample_lateral_trajectories(
+            start_state,
+            perception_data.lane_info,
+            planning_horizon
+        )
+        
+        # 算法5.4: 纵向轨迹采样
+        longitudinal_trajectories = self.sample_longitudinal_trajectories(
+            start_state,
+            perception_data.obstacles,
+            planning_horizon
+        )
+        
+        # 算法5.5: 轨迹组合
+        for lat_traj in lateral_trajectories:
+            for lon_traj in longitudinal_trajectories:
+                # 算法5.6: 轨迹合成
+                combined_trajectory = self.combine_trajectories(lat_traj, lon_traj)
+                
+                # 算法5.7: 轨迹可行性检查
+                if self.check_trajectory_feasibility(combined_trajectory):
+                    candidate_trajectories.append(combined_trajectory)
+        
+        # 算法5.8: 轨迹裁剪与优化
+        candidate_trajectories = self.prune_and_optimize_trajectories(
+            candidate_trajectories,
+            global_path['current_segment']
+        )
+        
+        return candidate_trajectories
+    
+    def evaluate_and_select_trajectory(self, candidate_trajectories, risk_assessment, behavior_predictions):
+        """步骤6: 轨迹评估与选择算法"""
+        print("6. Evaluating and selecting trajectory...")
+        
+        best_trajectory = None
+        best_score = -float('inf')
+        
+        # 算法6.1: 建立评估指标
+        evaluation_metrics = {
+            'safety': 0.4,      # 安全性权重 40%
+            'comfort': 0.2,     # 舒适性权重 20%
+            'efficiency': 0.2,  # 效率权重 20%
+            'legality': 0.1,    # 合法性权重 10%
+            'progress': 0.1     # 进度权重 10%
+        }
+        
+        for trajectory in candidate_trajectories:
+            # 算法6.2: 安全性评估
+            safety_score = self.evaluate_trajectory_safety(
+                trajectory,
+                risk_assessment,
+                behavior_predictions
+            )
+            
+            # 算法6.3: 舒适性评估
+            comfort_score = self.evaluate_trajectory_comfort(trajectory)
+            
+            # 算法6.4: 效率评估
+            efficiency_score = self.evaluate_trajectory_efficiency(trajectory)
+            
+            # 算法6.5: 合法性评估
+            legality_score = self.evaluate_trajectory_legality(
+                trajectory,
+                risk_assessment
+            )
+            
+            # 算法6.6: 进度评估
+            progress_score = self.evaluate_trajectory_progress(trajectory)
+            
+            # 算法6.7: 加权总分计算
+            total_score = (
+                safety_score * evaluation_metrics['safety'] +
+                comfort_score * evaluation_metrics['comfort'] +
+                efficiency_score * evaluation_metrics['efficiency'] +
+                legality_score * evaluation_metrics['legality'] +
+                progress_score * evaluation_metrics['progress']
+            )
+            
+            # 算法6.8: 选择最优轨迹
+            if total_score > best_score:
+                best_score = total_score
+                best_trajectory = trajectory
+        
+        # 算法6.9: 轨迹后处理
+        best_trajectory = self.post_process_trajectory(best_trajectory)
+        
+        return best_trajectory
+    
+    def generate_driving_decisions(self, selected_trajectory, driving_state):
+        """步骤7: 驾驶决策生成算法"""
+        print("7. Generating driving decisions...")
+        
+        # 算法7.1: 轨迹解析
+        trajectory_points = selected_trajectory['points']
+        current_point = trajectory_points[0]
+        target_point = trajectory_points[1]
+        
+        # 算法7.2: 计算横向控制需求
+        lateral_decision = self.calculate_lateral_decision(current_point, target_point)
+        
+        # 算法7.3: 计算纵向控制需求
+        longitudinal_decision = self.calculate_longitudinal_decision(
+            current_point,
+            target_point,
+            driving_state
+        )
+        
+        # 算法7.4: 决策整合
+        decisions = {
+            'lateral_control': lateral_decision,
+            'longitudinal_control': longitudinal_decision,
+            'driving_state': driving_state,
+            'target_velocity': target_point['velocity'],
+            'target_position': target_point['position'],
+            'trajectory': selected_trajectory
+        }
+        
+        # 算法7.5: 添加元决策信息
+        decisions['decision_type'] = self.determine_decision_type(decisions)
+        decisions['priority'] = self.assign_decision_priority(decisions)
+        decisions['timestamp'] = get_current_time()
+        
+        return decisions
+    
+    def optimize_decisions(self, driving_decisions):
+        """步骤8: 决策优化与平滑算法"""
+        print("8. Optimizing decisions...")
+        
+        # 算法8.1: 决策历史记录
+        self.previous_decisions.append(driving_decisions)
+        if len(self.previous_decisions) > 10:
+            self.previous_decisions.pop(0)
+        
+        # 算法8.2: 决策平滑处理
+        smoothed_decisions = self.smooth_decisions(
+            driving_decisions,
+            self.previous_decisions
+        )
+        
+        # 算法8.3: 决策冲突解决
+        if self.check_decision_conflicts(smoothed_decisions):
+            smoothed_decisions = self.resolve_decision_conflicts(smoothed_decisions)
+        
+        # 算法8.4: 决策可行性验证
+        if not self.validate_decision_feasibility(smoothed_decisions):
+            smoothed_decisions = self.adjust_decisions_for_feasibility(smoothed_decisions)
+        
+        # 算法8.5: 决策优化
+        optimized_decisions = self.optimize_decision_parameters(smoothed_decisions)
+        
+        return optimized_decisions
+    
+    def handle_emergency_situation(self, perception_data, current_decisions):
+        """步骤9: 紧急情况处理算法"""
+        print("9. Handling emergency situation...")
+        
+        # 算法9.1: 紧急情况识别
+        emergency_type = self.identify_emergency_type(perception_data)
+        
+        # 算法9.2: 紧急决策生成
+        emergency_decisions = self.generate_emergency_decisions(
+            emergency_type,
+            perception_data
+        )
+        
+        # 算法9.3: 决策合并（紧急决策优先）
+        merged_decisions = self.merge_decisions(
+            current_decisions,
+            emergency_decisions,
+            priority='emergency'
+        )
+        
+        # 算法9.4: 紧急状态通知
+        self.notify_emergency_state(emergency_type)
+        
+        return merged_decisions
+    
+    def validate_decisions(self, decisions, perception_data):
+        """步骤10: 决策验证与安全检查算法"""
+        print("10. Validating decisions...")
+        
+        validation_results = {
+            'safety_check': False,
+            'feasibility_check': False,
+            'legality_check': False,
+            'consistency_check': False
+        }
+        
+        # 算法10.1: 安全检查
+        validation_results['safety_check'] = self.perform_safety_check(
+            decisions,
+            perception_data
+        )
+        
+        # 算法10.2: 可行性检查
+        validation_results['feasibility_check'] = self.check_decision_feasibility(
+            decisions,
+            perception_data.ego_state
+        )
+        
+        # 算法10.3: 合法性检查
+        validation_results['legality_check'] = self.check_decision_legality(
+            decisions,
+            perception_data.traffic_signals
+        )
+        
+        # 算法10.4: 一致性检查
+        validation_results['consistency_check'] = self.check_decision_consistency(
+            decisions,
+            self.previous_decisions
+        )
+        
+        # 算法10.5: 最终验证
+        if all(validation_results.values()):
+            final_decisions = decisions
+            final_decisions['validation_passed'] = True
+        else:
+            # 算法10.6: 失败处理
+            final_decisions = self.handle_validation_failure(
+                decisions,
+                validation_results,
+                perception_data
+            )
+            final_decisions['validation_passed'] = False
+        
+        # 算法10.7: 添加验证信息
+        final_decisions['validation_results'] = validation_results
+        
+        return final_decisions
+
+
+# 主决策循环
+def decision_main_loop():
+    decision_module = DecisionModule()
+    
+    while vehicle_is_running:
+        # 接收感知数据
+        perception_data = receive_from_perception_module()
+        
+        # 执行决策算法
+        decisions = decision_module.make_driving_decisions(perception_data)
+        
+        # 发送到控制模块
+        send_to_control_module(decisions)
+        
+        # 控制循环频率（例如10Hz）
+        sleep(0.1)
