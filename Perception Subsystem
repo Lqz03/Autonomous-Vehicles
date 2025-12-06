@@ -1,0 +1,328 @@
+# PERCEPTION MODULE ALGORITHM
+# 输入：原始传感器数据
+# 输出：结构化环境信息
+
+class PerceptionModule:
+    
+    def __init__(self):
+        # 传感器初始化
+        self.camera = Camera()
+        self.lidar = LiDAR()
+        self.radar = Radar()
+        self.gps = GPS()
+        self.imu = IMU()
+        
+        # 处理参数
+        self.lane_detection_threshold = 0.8
+        self.obstacle_min_size = 0.5  # 最小障碍物尺寸(m³)
+        self.traffic_light_confidence = 0.9
+    
+    def process_perception_cycle(self):
+        """
+        完整的感知处理周期算法
+        返回结构化环境信息
+        """
+        print("=== PERCEPTION MODULE START ===")
+        
+        # 步骤1: 同步传感器数据
+        synchronized_data = self.synchronize_sensor_data()
+        
+        # 步骤2: 车道线检测与识别
+        lane_info = self.detect_and_identify_lanes(synchronized_data.camera)
+        
+        # 步骤3: 障碍物检测与分类
+        obstacles = self.detect_and_classify_obstacles(
+            synchronized_data.lidar, 
+            synchronized_data.radar
+        )
+        
+        # 步骤4: 交通信号识别
+        traffic_signals = self.recognize_traffic_signals(synchronized_data.camera)
+        
+        # 步骤5: 自我状态估计
+        ego_state = self.estimate_ego_state(
+            synchronized_data.gps,
+            synchronized_data.imu
+        )
+        
+        # 步骤6: 环境地图构建
+        environment_map = self.build_environment_map(
+            lane_info,
+            obstacles,
+            traffic_signals,
+            ego_state
+        )
+        
+        # 步骤7: 数据融合与置信度计算
+        fused_perception = self.fuse_perception_data(
+            lane_info,
+            obstacles,
+            traffic_signals,
+            ego_state
+        )
+        
+        print("=== PERCEPTION MODULE END ===")
+        
+        return fused_perception
+    
+    def synchronize_sensor_data(self):
+        """步骤1: 同步所有传感器的时间戳"""
+        print("1. Synchronizing sensor data...")
+        
+        # 获取当前时间戳
+        current_time = get_current_time()
+        
+        # 为每个传感器数据添加时间戳并同步
+        synchronized_data = {
+            'camera': self.camera.capture_frame(current_time),
+            'lidar': self.lidar.scan_environment(current_time),
+            'radar': self.radar.detect_objects(current_time),
+            'gps': self.gps.get_position(current_time),
+            'imu': self.imu.get_motion_data(current_time)
+        }
+        
+        return synchronized_data
+    
+    def detect_and_identify_lanes(self, camera_data):
+        """步骤2: 车道线检测与识别算法"""
+        print("2. Detecting and identifying lanes...")
+        
+        lane_info = {
+            'left_lane': None,
+            'right_lane': None,
+            'center_lane': None,
+            'lane_width': 3.5,  # 标准车道宽度
+            'lane_type': 'solid/dashed',  # 实线/虚线
+            'confidence': 0.0
+        }
+        
+        # 算法2.1: 图像预处理
+        preprocessed_image = self.preprocess_image(camera_data)
+        
+        # 算法2.2: 边缘检测
+        edges = self.detect_edges(preprocessed_image)
+        
+        # 算法2.3: 感兴趣区域(ROI)提取
+        roi_edges = self.extract_roi(edges)
+        
+        # 算法2.4: 霍夫变换检测直线
+        lines = self.hough_transform(roi_edges)
+        
+        # 算法2.5: 车道线拟合
+        if len(lines) >= 2:
+            left_lane, right_lane = self.fit_lane_lines(lines)
+            lane_info['left_lane'] = left_lane
+            lane_info['right_lane'] = right_lane
+            lane_info['center_lane'] = self.calculate_center_lane(left_lane, right_lane)
+            
+            # 计算置信度
+            lane_info['confidence'] = self.calculate_lane_confidence(left_lane, right_lane)
+        
+        # 算法2.6: 车道线类型识别
+        lane_info['lane_type'] = self.identify_lane_type(preprocessed_image, left_lane, right_lane)
+        
+        return lane_info
+    
+    def detect_and_classify_obstacles(self, lidar_data, radar_data):
+        """步骤3: 障碍物检测与分类算法"""
+        print("3. Detecting and classifying obstacles...")
+        
+        obstacles = []
+        
+        # 算法3.1: 点云地面分割
+        ground_points, obstacle_points = self.segment_ground(lidar_data)
+        
+        # 算法3.2: 点云聚类
+        clusters = self.cluster_point_cloud(obstacle_points)
+        
+        for cluster in clusters:
+            # 算法3.3: 障碍物特征提取
+            features = self.extract_obstacle_features(cluster)
+            
+            # 算法3.4: 障碍物分类
+            obstacle_type = self.classify_obstacle(features)
+            
+            # 算法3.5: 障碍物追踪（多帧关联）
+            obstacle_id = self.track_obstacle(cluster, obstacle_type)
+            
+            # 算法3.6: 计算障碍物状态
+            obstacle_state = self.calculate_obstacle_state(cluster, radar_data)
+            
+            # 创建障碍物对象
+            obstacle = {
+                'id': obstacle_id,
+                'type': obstacle_type,  # vehicle, pedestrian, cyclist, etc.
+                'position': obstacle_state['position'],
+                'velocity': obstacle_state['velocity'],
+                'size': obstacle_state['size'],
+                'distance': obstacle_state['distance'],
+                'confidence': obstacle_state['confidence']
+            }
+            
+            obstacles.append(obstacle)
+        
+        # 算法3.7: 障碍物威胁评估
+        obstacles = self.assess_obstacle_threats(obstacles)
+        
+        return obstacles
+    
+    def recognize_traffic_signals(self, camera_data):
+        """步骤4: 交通信号识别算法"""
+        print("4. Recognizing traffic signals...")
+        
+        traffic_signals = []
+        
+        # 算法4.1: 交通灯区域检测
+        traffic_light_regions = self.detect_traffic_light_regions(camera_data)
+        
+        for region in traffic_light_regions:
+            # 算法4.2: 交通灯状态识别
+            light_state = self.recognize_light_state(region)
+            
+            # 算法4.3: 信号灯类型识别
+            signal_type = self.identify_signal_type(region)
+            
+            # 算法4.4: 倒计时识别（如果存在）
+            countdown = self.recognize_countdown(region)
+            
+            signal = {
+                'type': signal_type,  # traffic_light, stop_sign, yield_sign, etc.
+                'state': light_state,  # red, yellow, green, unknown
+                'countdown': countdown,
+                'position': region['position'],
+                'confidence': region['confidence']
+            }
+            
+            traffic_signals.append(signal)
+        
+        return traffic_signals
+    
+    def estimate_ego_state(self, gps_data, imu_data):
+        """步骤5: 自我状态估计算法"""
+        print("5. Estimating ego vehicle state...")
+        
+        # 算法5.1: 位置估计（融合GPS和IMU）
+        position = self.fuse_position_data(gps_data, imu_data)
+        
+        # 算法5.2: 速度估计
+        velocity = self.estimate_velocity(imu_data)
+        
+        # 算法5.3: 姿态估计（横摆角、俯仰角、翻滚角）
+        attitude = self.estimate_attitude(imu_data)
+        
+        # 算法5.4: 加速度估计
+        acceleration = imu_data.linear_acceleration
+        
+        ego_state = {
+            'position': position,
+            'velocity': velocity,
+            'acceleration': acceleration,
+            'attitude': attitude,
+            'timestamp': get_current_time()
+        }
+        
+        return ego_state
+    
+    def build_environment_map(self, lane_info, obstacles, traffic_signals, ego_state):
+        """步骤6: 环境地图构建算法"""
+        print("6. Building environment map...")
+        
+        # 算法6.1: 创建局部地图框架
+        local_map = self.create_local_map_frame(ego_state)
+        
+        # 算法6.2: 添加车道信息到地图
+        local_map = self.add_lanes_to_map(local_map, lane_info)
+        
+        # 算法6.3: 添加障碍物到地图
+        local_map = self.add_obstacles_to_map(local_map, obstacles)
+        
+        # 算法6.4: 添加交通信号到地图
+        local_map = self.add_traffic_signals_to_map(local_map, traffic_signals)
+        
+        # 算法6.5: 计算可行驶区域
+        drivable_area = self.calculate_drivable_area(local_map)
+        local_map['drivable_area'] = drivable_area
+        
+        # 算法6.6: 地图更新与维护
+        self.update_environment_map(local_map)
+        
+        return local_map
+    
+    def fuse_perception_data(self, lane_info, obstacles, traffic_signals, ego_state):
+        """步骤7: 数据融合与置信度计算算法"""
+        print("7. Fusing perception data...")
+        
+        # 算法7.1: 时间同步检查
+        self.check_temporal_synchronization()
+        
+        # 算法7.2: 空间对齐
+        aligned_data = self.spatially_align_data(lane_info, obstacles, traffic_signals)
+        
+        # 算法7.3: 传感器融合（卡尔曼滤波/贝叶斯融合）
+        fused_data = self.sensor_fusion(aligned_data)
+        
+        # 算法7.4: 置信度融合
+        overall_confidence = self.fuse_confidence_levels(
+            lane_info['confidence'],
+            self.calculate_obstacles_confidence(obstacles),
+            self.calculate_signals_confidence(traffic_signals)
+        )
+        
+        # 算法7.5: 创建最终感知输出
+        perception_output = {
+            'ego_state': ego_state,
+            'lane_info': lane_info,
+            'obstacles': obstacles,
+            'traffic_signals': traffic_signals,
+            'environment_map': self.build_environment_map(lane_info, obstacles, traffic_signals, ego_state),
+            'timestamp': get_current_time(),
+            'overall_confidence': overall_confidence,
+            'perception_quality': self.assess_perception_quality()
+        }
+        
+        # 算法7.6: 异常检测与处理
+        if overall_confidence < 0.7:
+            perception_output = self.handle_low_confidence(perception_output)
+        
+        return perception_output
+    
+    # 辅助方法
+    def preprocess_image(self, image_data):
+        """图像预处理"""
+        # 包括：去噪、对比度增强、颜色空间转换等
+        return processed_image
+    
+    def segment_ground(self, point_cloud):
+        """地面分割"""
+        # 使用RANSAC或深度学习方法
+        return ground_points, obstacle_points
+    
+    def cluster_point_cloud(self, points):
+        """点云聚类"""
+        # 使用DBSCAN或欧几里得聚类
+        return clusters
+    
+    def track_obstacle(self, cluster, obstacle_type):
+        """障碍物追踪"""
+        # 使用卡尔曼滤波或匈牙利算法进行多目标跟踪
+        return obstacle_id
+    
+    def assess_perception_quality(self):
+        """评估感知质量"""
+        # 基于传感器状态、环境条件、置信度等
+        return quality_score
+
+
+# 主感知循环
+def perception_main_loop():
+    perception_module = PerceptionModule()
+    
+    while vehicle_is_running:
+        # 执行感知周期
+        perception_data = perception_module.process_perception_cycle()
+        
+        # 发送到决策模块
+        send_to_decision_module(perception_data)
+        
+        # 控制循环频率（例如10Hz）
+        sleep(0.1)
